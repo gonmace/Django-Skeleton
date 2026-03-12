@@ -1,47 +1,37 @@
-{% load static %}
-
 <!DOCTYPE html>
 <html lang="es" data-theme="light">
-    <head>
-        {% include 'base_head.html' %}
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-        {% block css %}
-        {% endblock css %}
+    <title>{% block title %}Mi Proyecto{% endblock %}</title>
+    <meta name="description" content="{% block meta_description %}{% endblock %}">
 
-        {% block javascript_top %}
-        {% endblock javascript_top %}
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="{{ request.build_absolute_uri }}">
+    <meta property="og:title" content="{% block og_title %}{% block title_og %}Mi Proyecto{% endblock %}{% endblock %}">
+    <meta property="og:description" content="{% block og_description %}{% endblock %}">
+    <meta property="og:image" content="{% block og_image %}{% load static %}{% static 'img/og-default.jpg' %}{% endblock %}">
 
-        <title>{% block title %}{% endblock %}</title>
-    </head>
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{% block twitter_title %}{% endblock %}">
+    <meta name="twitter:description" content="{% block twitter_description %}{% endblock %}">
 
-<body class="bg-base-300 transition-colors duration-200 font-poppins">
+    {% load static tailwind_tags %}
+    <link rel="icon" type="image/svg+xml" href="{% static 'img/favicon.svg' %}">
+    {% tailwind_css %}
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    {% block content %}{% endblock %}
 
-<div class="flex h-screen overflow-hidden">
-    <!-- Sidebar -->
-    {% include 'components/sidebar.html' %}
+    {% block extra_scripts %}{% endblock %}
 
-    <!-- Main Content Wrapper -->
-    <div class="flex-1 flex flex-col overflow-hidden">
-        <!-- Top Navigation -->
-        {% include 'components/common/header.html' %}
-
-        <!-- Page Content -->
-        <main class="flex-1 overflow-y-auto p-4 text-base-content">
-            <!-- Breadcrumbs -->
-            {% include 'components/common/breadcrumbs.html' %}
-
-            {% block pre_content %}{% endblock %}
-            {% block content %}{% endblock %}
-            {% block post_content %}{% endblock %}
-        </main>
-    </div>
-</div>
-
-<!-- Overlay for mobile sidebar -->
-<div id="sidebar-overlay" class="fixed inset-0 bg-opacity-50 z-40 hidden lg:hidden"></div>
-
-{% block extra_js %}{% endblock %}
+    {% if debug %}
+        {% url 'django_browser_reload:reload' as reload_url %}
+        <script src="{{ reload_url }}" defer></script>
+    {% endif %}
 </body>
 </html>
-
-

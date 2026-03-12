@@ -1,48 +1,40 @@
-# docker-compose.yml
 services:
-  pozos-db:
-    image: postgres:15-alpine  
-    container_name: postgres_db
-    ports:
-      - "5435:5432"
+  postgres:
+    image: postgres:17-alpine
+    container_name: ${PROJECT_NAME}_db
     env_file:
-      - .env  
+      - .env
     volumes:
       - postgres_data:/var/lib/postgresql/data/
     networks:
-      - pozos_network
+      - app_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
-  pozos-redis:
-    image: redis:alpine
-    container_name: redis_cache
-    ports:
-      - "6381:6379"
-    networks:
-      - pozos_network
-
-  pozos-dj:
+  django:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: django_app
-    command: ./entrypoint.sh
-    volumes:
-      - ./staticfiles:/app/staticfiles  
-      - ./media:/app/media    
-    ports:
-      - "8003:8000"  
+    container_name: ${PROJECT_NAME}_app
+    restart: always
     env_file:
-      - .env  
+      - .env
+    volumes:
+      - ./staticfiles:/app/staticfiles
+      - ./media:/app/media
+    ports:
+      - "${APP_PORT:-8000}:8000"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
     networks:
-      - pozos_network
+      - app_network
 
 volumes:
   postgres_data:
-  staticfiles:
-  media:
 
 networks:
-  pozos_network:
+  app_network:

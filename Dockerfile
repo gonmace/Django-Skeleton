@@ -1,27 +1,37 @@
+# ── Stage 1: compilar CSS con Node ────────────────────────────────────────────
+FROM node:22-slim AS css-builder
+
+WORKDIR /app/theme/static_src
+
+COPY theme/static_src/package.json ./
+RUN npm install
+
+COPY theme/static_src/ ./
+RUN npm run build
+
+# ── Stage 2: imagen Python de producción ──────────────────────────────────────
 FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED 1
-ENV DJANGO_SETTINGS_MODULE=config.prod
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-    netcat-openbsd \
-    libpq-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-    
-RUN pip install --upgrade pip
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV DJANGO_SETTINGS_MODULE=core.settings
 
 WORKDIR /app
 
-COPY requirements.txt /app/
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    netcat-openbsd \
+    libpq-dev \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /app/
+COPY ./ ./
 
-RUN chmod +x ./entrypoint.sh
+# Copiar el CSS compilado desde el stage anterior
+COPY --from=css-builder /app/theme/static/css/dist/ ./theme/static/css/dist/
 
-RUN python manage.py collectstatic --noinput --settings=config.prod
+RUN python manage.py collectstatic --noinput
 
-EXPOSE 8000
+CMD ["sh", "entrypoint.sh"]

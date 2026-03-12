@@ -1,14 +1,17 @@
 #!/bin/sh
 
-# Espera a que el contenedor de PostgreSQL esté disponible en el puerto 5432
+echo 'Esperando a que PostgreSQL esté disponible...'
 while ! nc -z postgres 5432; do
-  echo "Esperando a que PostgreSQL arranque..."
   sleep 1
 done
+echo 'PostgreSQL está listo.'
 
-echo "PostgreSQL está listo"
+echo 'Ejecutando migraciones...'
+python manage.py migrate
 
-# Ejecutar Gunicorn después de que PostgreSQL esté listo
-exec gunicorn config.wsgi:application --bind 0.0.0.0:8000
-
-exec "$@"
+echo 'Iniciando Gunicorn...'
+exec gunicorn core.wsgi:application \
+    --bind 0.0.0.0:8000 \
+    --workers 3 \
+    --access-logfile - \
+    --error-logfile -

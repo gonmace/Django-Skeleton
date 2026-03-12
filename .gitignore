@@ -1,16 +1,54 @@
-# Ignorar archivos de Python
-*.pyc
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
 
-# Ignorar archivos de entornos virtuales
-.venv/
-
-# Ignorar archivos de configuración de editor
-.vscode/
-staticfiles
-ArchivosBase
-.vscode/
-.env
+# Django
+*.log
 db.sqlite3
+db.sqlite3-journal
+staticfiles/
+media/
+sent_emails/
+cache/
 
-tailwind.css
+# Entorno
+.env
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+theme/static_src/node_modules/
+
+# CSS compilado (se genera automáticamente)
+theme/static/css/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+
+# Nginx generado por deploy.sh (usa nombre del proyecto)
+*.conf
+!nginx.conf
+.env
+.venv/
+.claude/
+.vscode/
