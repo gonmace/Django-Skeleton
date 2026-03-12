@@ -1,13 +1,14 @@
 # Django Skeleton
 
-Esqueleto base para proyectos Django con Tailwind v4 + DaisyUI v5, listo para desarrollo local y despliegue en producción con Docker + PostgreSQL.
+Esqueleto base para proyectos Django con Tailwind v4 + DaisyUI v5, listo para desarrollo local y despliegue en producción con Docker + PostgreSQL + n8n.
 
 ## Stack
 
 - **Backend:** Django 5.1+, Gunicorn
-- **Base de datos:** SQLite (dev) / PostgreSQL 17 (prod)
+- **Base de datos:** SQLite (dev local) / PostgreSQL 17 (dev Docker y prod)
 - **Estilos:** Tailwind CSS v4 + DaisyUI v5
 - **Archivos estáticos:** Whitenoise
+- **Automatización:** n8n (disponible en `/n8n/` en producción)
 - **Seguridad:** django-axes, django-csp, headers HTTP
 - **Monitoreo:** Sentry
 - **Producción:** Docker Compose + Nginx (gzip)
@@ -36,12 +37,18 @@ Esqueleto base para proyectos Django con Tailwind v4 + DaisyUI v5, listo para de
 │   └── img/
 │       ├── favicon.svg         # Reemplazar con tu favicon
 │       └── og-default.jpg      # Reemplazar con tu imagen OG (1200x630)
+├── n8n/
+│   └── workflows/              # Workflows exportados (versionados en git)
+├── docker/
+│   ├── init-db.sql             # Crea la base de datos de n8n en postgres
+│   └── n8n-export.sh           # Script de exportación de workflows
 ├── staticfiles/        # Salida de collectstatic (generado)
 ├── media/              # Uploads de usuarios (generado)
 ├── requirements.txt        # Dependencias de producción
 ├── requirements-dev.txt    # Dependencias de desarrollo
 ├── Dockerfile          # Multi-stage: Node (CSS) + Python
-├── docker-compose.yml
+├── docker-compose.yml      # Producción: Django + PostgreSQL + n8n
+├── docker-compose.dev.yml  # Desarrollo: PostgreSQL + n8n
 ├── entrypoint.sh       # Migraciones + Gunicorn
 ├── nginx.conf          # Plantilla nginx con gzip
 ├── deploy.sh           # Script de despliegue en VPS
@@ -66,20 +73,37 @@ make install
 cp .env.example .env
 ```
 
-Para desarrollo basta con un `.env` mínimo:
+Para desarrollo con Django local + SQLite, basta con:
 
 ```env
 DEBUG=True
 ```
 
+Para desarrollo con PostgreSQL y n8n en Docker:
+
+```env
+DEBUG=True
+PROJECT_NAME=miproyecto
+POSTGRES_DB=miproyecto_db
+POSTGRES_USER=miproyecto_user
+POSTGRES_PASSWORD=contraseña
+N8N_ENCRYPTION_KEY=dev-key-cualquiera
+```
+
 ### 3. Iniciar el servidor
 
+**Solo Django (SQLite):**
 ```bash
 make dev
 ```
 
-O manualmente en dos terminales:
+**Con PostgreSQL + n8n en Docker:**
+```bash
+make dev-up   # levanta PostgreSQL y n8n en Docker
+make dev      # corre Django localmente apuntando al postgres del contenedor
+```
 
+O manualmente en dos terminales:
 ```bash
 # Terminal 1 — watcher de Tailwind
 python manage.py tailwind start
@@ -89,7 +113,27 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-Acceder en: http://127.0.0.1:8000
+- Django: http://127.0.0.1:8000
+- n8n: http://localhost:5678
+
+## n8n — flujo dev → producción
+
+Los workflows se versionan en git dentro de `n8n/workflows/`.
+
+```bash
+# 1. Exportar workflows desde el contenedor de desarrollo
+make n8n-export
+
+# 2. Commitear y subir
+git add n8n/workflows/
+git commit -m "feat: actualizar workflows n8n"
+git push
+
+# 3. Desplegar (importa automáticamente en producción)
+make deploy
+```
+
+En producción, n8n está disponible en `https://tudominio.com/n8n/`.
 
 ## Producción (VPS)
 
@@ -115,9 +159,13 @@ POSTGRES_DB=miproyecto_db
 POSTGRES_USER=miproyecto_user
 POSTGRES_PASSWORD=contraseña-segura
 
+N8N_ENCRYPTION_KEY=clave-larga-y-secreta
+
 # Opcional — monitoreo de errores
 SENTRY_DSN=https://...@sentry.io/...
 ```
+
+> `N8N_ENCRYPTION_KEY` debe mantenerse constante — cambiarla invalida todas las credenciales guardadas en n8n.
 
 ### 2. Desplegar
 
@@ -158,11 +206,14 @@ El archivo `core/settings.py` se adapta automáticamente según las variables de
 - `ADMINS` en `settings.py` — cambiar el email del administrador
 - `LANGUAGE_CODE` y `TIME_ZONE` en `settings.py` — ajustar a tu región
 
-## Comandos útiles
+## Comandos
 
 ```bash
 make install      # pip install + tailwind install
+make dev-up       # levanta PostgreSQL + n8n en Docker
 make dev          # migrate + tailwind start + runserver
+make dev-down     # detiene los contenedores de desarrollo
+make n8n-export   # exporta workflows de n8n a n8n/workflows/
 make migrate      # python manage.py migrate
 make migrations   # python manage.py makemigrations
 make superuser    # python manage.py createsuperuser
@@ -176,7 +227,7 @@ make down         # docker compose down
 # Nueva app
 python manage.py startapp nombre_app
 
-# Acceder al contenedor
+# Acceder al contenedor Django
 docker compose exec django bash
 
 # Backup de la base de datos
