@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Tests
+        run: python manage.py test
+      - name: Check de despliegue (configuración de producción)
+        env:
+          DEBUG: "False"
+          SECRET_KEY: ci-only-secret-key-ci-only-secret-key-ci-only-secret-key-12345
+          ALLOWED_HOSTS: example.com
+        run: python manage.py check --deploy --fail-level ERROR
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t app-ci .

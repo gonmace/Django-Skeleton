@@ -18,7 +18,7 @@ N8N_MCP_ENABLED=${N8N_MCP_ENABLED:-}
 
 # Lista de "servicio:puerto" separados por espacio
 CHECKS="Django(APP_PORT):${APP_PORT:-8000}"
-[ "${POSTGRES_MODE}" = "container" ] && CHECKS="${CHECKS} PostgreSQL(POSTGRES_HOST_PORT):${POSTGRES_HOST_PORT:-5432}"
+# PostgreSQL no se publica en el host en producción (solo red interna Docker): no se verifica.
 [ -n "${N8N_DOMAIN}" ] && CHECKS="${CHECKS} n8n(N8N_PORT):${N8N_PORT:-8001}"
 [ "${N8N_MCP_ENABLED}" = "true" ] && [ -n "${N8N_DOMAIN}" ] && CHECKS="${CHECKS} n8n-MCP(N8N_MCP_PORT):${N8N_MCP_PORT:-8002}"
 

@@ -1,35 +1,47 @@
 # ── Stage 1: compilar CSS con Node (solo build, no va a producción) ─────────────
-FROM node:22-slim AS css-builder
-
-# Copiar todo el proyecto para que Tailwind escanee templates al compilar
-COPY . /app/
+FROM node:24-slim AS css-builder
 
 WORKDIR /app/theme/static_src
 
-# npm ci instala exactamente lo que dice package-lock.json (incluye devDependencies)
-# Los módulos de Tailwind/DaisyUI solo existen en esta stage de build
-RUN npm ci && npm run build
+# Capa cacheable: las dependencias npm solo se reinstalan si cambia el lockfile
+COPY theme/static_src/package.json theme/static_src/package-lock.json ./
+RUN npm ci
+
+# Tailwind escanea templates y apps al compilar (ver @source en styles.css)
+COPY theme/static_src/src ./src
+COPY templates /app/templates
+COPY home /app/home
+RUN npm run build
 
 # ── Stage 2: imagen Python de producción (sin Node ni módulos npm) ─────────────
-FROM python:3.12-slim
+FROM python:3.14-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV DJANGO_SETTINGS_MODULE=core.settings
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DJANGO_SETTINGS_MODULE=core.settings
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
+# psycopg2-binary trae libpq: no hacen falta gcc ni libpq-dev
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ./ ./
+# Usuario no-root (UID 1000: coincide con el dueño de ./staticfiles y ./media en el host)
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app/staticfiles /app/media \
+    && chown -R app:app /app
+
+COPY --chown=app:app ./ ./
 
 # CSS ya compilado y minificado desde la stage anterior
-COPY --from=css-builder /app/static/css/dist/ ./static/css/dist/
+COPY --from=css-builder --chown=app:app /app/static/css/dist/ ./static/css/dist/
+
+USER app
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import os, urllib.request as u; \
+h=(os.environ.get('ALLOWED_HOSTS') or 'localhost').split(',')[0].strip(); \
+r=u.Request('http://127.0.0.1:8000/healthz', headers={'Host': h, 'X-Forwarded-Proto': 'https'}); \
+u.urlopen(r, timeout=4)" || exit 1
 
 CMD ["sh", "entrypoint.sh"]

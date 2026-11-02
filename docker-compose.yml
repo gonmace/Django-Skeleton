@@ -1,8 +1,17 @@
+# Rotación de logs: sin esto json-file crece sin límite y llena el disco del VPS
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     profiles: [postgres]
     image: postgres:17-alpine
     container_name: ${PROJECT_NAME}_db
+    restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     volumes:
@@ -17,9 +26,11 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: ${PROJECT_NAME}_redis
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["redis-server", "--maxmemory", "${REDIS_MAXMEMORY:-256mb}", "--maxmemory-policy", "allkeys-lru"]
     networks:
       - app_network
     healthcheck:
@@ -32,12 +43,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Tag explícito: deploy.sh etiqueta cada build con el SHA de git (habilita make rollback)
+    image: ${PROJECT_NAME}_app:${IMAGE_TAG:-latest}
     container_name: ${PROJECT_NAME}_app
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     environment:
-      - POSTGRES_HOST=postgres  # dentro de Docker el hostname es el nombre del servicio
+      # Respeta POSTGRES_HOST del .env (postgres | host.docker.internal)
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -48,6 +63,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+        required: false   # se ignora si el profile "postgres" no está activo (modo host)
     networks:
       - app_network
 
@@ -56,9 +74,12 @@ services:
     build:
       context: .
       dockerfile: docker/n8n.Dockerfile
+      args:
+        N8N_VERSION: ${N8N_VERSION:-latest}
     image: ${PROJECT_NAME}_n8n:latest
     container_name: ${PROJECT_NAME}_n8n
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:${N8N_PORT:-8001}:5678"
     environment:
@@ -101,9 +122,10 @@ services:
 
   n8n-mcp:
     profiles: [n8n-mcp]
-    image: ghcr.io/czlonkowski/n8n-mcp:latest
+    image: ghcr.io/czlonkowski/n8n-mcp:${N8N_MCP_VERSION:-latest}
     container_name: ${PROJECT_NAME}_n8n_mcp
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
     environment:
       N8N_API_URL: http://n8n:5678
       N8N_API_KEY: ${N8N_API_KEY}

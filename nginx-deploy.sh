@@ -28,6 +28,14 @@ NGINX_OUT="${PROJECT_NAME}.conf"
 NGINX_AVAILABLE="/etc/nginx/sites-available/${PROJECT_NAME}.conf"
 NGINX_ENABLED="/etc/nginx/sites-enabled/${PROJECT_NAME}.conf"
 
+# Certbot modifica el archivo instalado (SSL): sobrescribirlo quita los certificados.
+if sudo grep -q "managed by Certbot" "${NGINX_AVAILABLE}" 2>/dev/null && [ "${1:-}" != "--force" ]; then
+    echo "Error: ${NGINX_AVAILABLE} ya tiene SSL configurado por certbot." >&2
+    echo "  Sobrescribirlo eliminaría los certificados. Si es lo que quieres:" >&2
+    echo "    bash nginx-deploy.sh --force   (y luego re-ejecuta certbot)" >&2
+    exit 1
+fi
+
 echo "▶ Generando ${NGINX_OUT}..."
 
 # Usar Python para sustituciones seguras (evita problemas con caracteres especiales en sed)
@@ -83,6 +91,12 @@ sudo cp "${NGINX_OUT}" "${NGINX_AVAILABLE}"
 if [ ! -L "${NGINX_ENABLED}" ]; then
     sudo ln -s "${NGINX_AVAILABLE}" "${NGINX_ENABLED}"
     echo "  Symlink creado: ${NGINX_ENABLED}"
+fi
+
+# nginx (www-data) debe poder leer staticfiles/ y media/ del proyecto
+if ! sudo -u www-data test -r "${PROJECT_DIR}/staticfiles" 2>/dev/null; then
+    echo "  AVISO: www-data no puede leer ${PROJECT_DIR}/staticfiles (se crea en el primer deploy)."
+    echo "         Asegura permisos de paso (chmod o+x) en cada directorio padre de ${PROJECT_DIR}."
 fi
 
 sudo nginx -t

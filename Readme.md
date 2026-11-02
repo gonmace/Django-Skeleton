@@ -6,13 +6,13 @@ Skeleton para desplegar Django en un VPS con nginx como reverse proxy. Incluye s
 
 | Componente | Tecnología |
 |---|---|
-| Framework | Django 5.2+ |
-| Servidor WSGI | Gunicorn (3 workers) |
+| Framework | Django 6.1+ (Python 3.14) |
+| Servidor WSGI | Gunicorn (`GUNICORN_WORKERS`, default 3), contenedor no-root |
 | Base de datos | PostgreSQL 17 (contenedor o host) |
-| Cache / Sesiones | Redis 7 |
+| Cache / Sesiones | Redis 8 (sesiones `cached_db`) |
 | CSS | Tailwind CSS v4.2 + DaisyUI v5.5 |
 | Archivos estáticos | Whitenoise (`CompressedManifestStaticFilesStorage`) + nginx (`gzip_static`) |
-| Seguridad | django-axes (cache backend), django-csp, HSTS |
+| Seguridad | django-axes (handler de DB, gestionable desde el admin), django-csp, HSTS |
 | Hot reload (dev) | django-browser-reload |
 | Automatización (opcional) | n8n |
 | MCP Server (opcional) | n8n-MCP |
@@ -40,7 +40,7 @@ sudo certbot --nginx -d tudominio.com
 make deploy
 ```
 
-Para deploys posteriores solo se necesita `make deploy` — hace `git pull` + verifica puertos + rebuild automáticamente. **Nunca volver a ejecutar `make nginx`** después de que certbot configuró el SSL.
+Para deploys posteriores solo se necesita `make deploy` (ver sección *Deploy*). **Nunca volver a ejecutar `make nginx`** después de que certbot configuró el SSL.
 
 ---
 
@@ -56,16 +56,14 @@ make setup             # genera .env (elige SQLite / sin n8n)
 make dev               # migrate + tailwind watcher + runserver
 ```
 
-> En este modo axes usa el backend de base de datos en lugar de Redis — no hay crash si Redis no está disponible.
-
 ### Opción B — Completo (PostgreSQL + Redis en Docker)
 
 ```bash
 make install           # instala dependencias Python + Tailwind
 make setup             # genera .env con PostgreSQL
-make dev-up            # levanta Redis + PostgreSQL (+ n8n/MCP si están en .env)
+make dev               # levanta Redis + PostgreSQL (+ n8n/MCP) y arranca Django + Tailwind
 make dev-check         # verifica que todo esté corriendo
-make dev               # migrate + tailwind watcher + runserver
+make dev-down          # detiene los contenedores de desarrollo
 ```
 
 En ambos casos Django corre nativo en el host (no en Docker). Redis en Docker es accesible en `localhost:6379`.
@@ -117,9 +115,9 @@ Los contenedores se conectan al PostgreSQL instalado en el VPS via `host.docker.
 
 **Requisitos para modo host:**
 1. `listen_addresses` en `postgresql.conf` debe incluir la IP del bridge Docker (o `*`)
-2. `pg_hba.conf` debe aceptar conexiones desde la red Docker (`172.17.0.0/16`):
+2. `pg_hba.conf` debe aceptar conexiones desde la red Docker (`172.16.0.0/12`):
    ```
-   host  all  all  172.17.0.0/16  md5
+   host  all  all  172.16.0.0/12  md5
    ```
 3. Crear manualmente las bases de datos del proyecto y `n8n`
 
@@ -217,7 +215,6 @@ Redis es siempre activo y optimiza tres aspectos clave:
 |---|---|---|
 | Cache | `LocMemCache` por worker (no compartido) | Cache compartido entre los 3 workers Gunicorn |
 | Sesiones | Escrituras a PostgreSQL en cada request | Cache en memoria, sin tocar la DB |
-| django-axes | Escrituras a DB en cada intento fallido | Operaciones en cache, más rápido bajo ataques |
 
 ---
 
@@ -262,7 +259,9 @@ Redis es siempre activo y optimiza tres aspectos clave:
 | `make dev-down` | Detiene servicios de desarrollo |
 | `make dev-logs` | Logs de servicios de desarrollo |
 | `make dev-check` | Verifica estado del entorno de desarrollo |
-| `make dev` | migrate + tailwind start + runserver |
+| `make dev` | `dev-up` + migrate + tailwind start + runserver |
+| `make sync-media` | Copia `media/` local al bucket S3 configurado en el admin |
+| `make axes-reset` | Desbloquea todos los accesos bloqueados por axes |
 | `make migrate` | Ejecuta migraciones |
 | `make migrations` | Crea migraciones |
 | `make superuser` | Crea superusuario |
@@ -276,7 +275,11 @@ Redis es siempre activo y optimiza tres aspectos clave:
 | `make nginx` | Instala config nginx (**solo primera vez**) |
 | `make deploy` | Despliega en VPS (git pull + verifica puertos + rebuild) |
 | `make logs` | Logs de Django en producción |
-| `make down` | Detiene contenedores de producción |
+| `make down` | Detiene contenedores de producción (todos los profiles) |
+| `make backup` | Backup de PostgreSQL a `backups/*.sql.gz` (retención: 10) |
+| `make restore FILE=...` | Restaura un backup (destructivo, pide confirmación) |
+| `make rollback [TAG=sha]` | Vuelve a la imagen anterior de Django (no revierte migraciones) |
+| `make ps` / `make restart` | Estado / reinicio de Django en producción |
 
 ---
 
@@ -284,7 +287,8 @@ Redis es siempre activo y optimiza tres aspectos clave:
 
 ```
 ├── core/                    # Configuración Django (settings, urls, wsgi)
-├── home/                    # App principal (index, sitemaps)
+├── home/                    # App principal (index, sitemaps, healthz)
+├── cdn/                     # Config de media/CDN desde el admin (storage dinámico)
 ├── templates/               # Templates globales (base, 404, 500, robots.txt)
 ├── theme/                   # App Tailwind (static_src/ con npm build)
 ├── static/                  # Assets estáticos (img, css)
@@ -306,7 +310,8 @@ Redis es siempre activo y optimiza tres aspectos clave:
 ├── nginx-n8n.conf           # Template nginx n8n (con marcador {{MCP_BLOCK}})
 ├── nginx-n8n-mcp.conf       # Location block para n8n-MCP (SSE)
 ├── nginx-deploy.sh          # Genera e instala config nginx (solo primera vez)
-├── deploy.sh                # Script de despliegue VPS
+├── deploy.sh                # Despliegue VPS (build, backup condicional, healthcheck, rollback)
+├── scripts/                 # lib.sh, backup.sh, restore.sh, rollback.sh
 ├── setup.sh                 # Wizard de configuración inicial
 ├── check-ports.sh           # Verifica disponibilidad de puertos
 ├── Makefile
@@ -318,10 +323,48 @@ Redis es siempre activo y optimiza tres aspectos clave:
 
 ---
 
+## Deploy
+
+`make deploy` (`deploy.sh`) despliega con downtime de segundos:
+
+1. `git pull --ff-only` y re-ejecución del script actualizado.
+2. Build de la imagen **mientras la versión actual sigue sirviendo**; se etiqueta con el SHA de git.
+3. **Backup condicional**: solo si hay migraciones pendientes y la DB ya tiene datos. `BACKUP=always|never` lo fuerza u omite (`make deploy BACKUP=always`). Si el backup falla, el deploy se aborta sin tocar nada.
+4. `docker compose up -d` recrea solo lo que cambió (sin `down`).
+5. Espera el healthcheck (`/healthz`: DB + cache). Si falla y no se aplicaron migraciones → **rollback automático** a la imagen anterior; si se aplicaron, indica `make restore` / `make rollback`.
+6. Conserva las 3 últimas imágenes de la app y registra `.deploy/previous`.
+
+Backups periódicos independientes del deploy (cron diario, 03:00):
+
+```cron
+0 3 * * * cd /ruta/al/proyecto && bash scripts/backup.sh diario >/dev/null
+```
+
+Las versiones de n8n / n8n-MCP son `latest` por defecto; fíjalas con `N8N_VERSION` / `N8N_MCP_VERSION` en `.env`. PostgreSQL se mantiene en 17 (la 18 cambia el layout de datos; migrar requiere dump/restore: `make backup` → cambiar imagen → `make restore`).
+
+---
+
+## Media y CDN (configurable desde el admin)
+
+Por defecto los uploads se guardan en el propio VPS (`media/`, servidos por nginx en `/media/`). Desde el admin, **Almacenamiento de media / CDN → Configuración**, se puede cambiar sin tocar código ni reiniciar:
+
+| Modo | Qué hace |
+|---|---|
+| **Este servidor** (defecto) | Archivos en el VPS. Con *URL de la CDN* definida, las URLs públicas pasan por una CDN *pull* que apunta al sitio (ej. `https://cdn.midominio.com` → se sirve `/media/…`). |
+| **S3-compatible** | Archivos en un bucket (AWS S3, Cloudflare R2, DigitalOcean Spaces, MinIO…). Con *URL de la CDN*, las URLs usan el dominio personalizado del bucket. |
+
+- Los cambios aplican de inmediato (config cacheada en Redis, invalidada al guardar). Al guardar en modo S3 se prueba la conexión y se avisa si falla.
+- El origen de la CDN/bucket se agrega solo al CSP (`img-src`, `media-src`).
+- Los archivos ya subidos **no se mueven solos** al cambiar de modo: `make sync-media` copia `media/` al bucket (no borra nada).
+- En plantillas/código usa siempre `campo.url` (no `{{ MEDIA_URL }}`) para que respete la configuración.
+- Las credenciales S3 se guardan en la base de datos: usa una clave limitada a ese bucket.
+
+---
+
 ## Notas de seguridad
 
-- **Admin URL aleatorio** — generado por `setup.sh`, desindexado via `robots.txt`
-- **Brute-force protection** — django-axes bloquea tras 5 intentos fallidos, 1h cooldown, usando Redis (no DB) como backend en producción
+- **Admin URL aleatorio** — generado por `setup.sh` (no se publica en `robots.txt`)
+- **Brute-force protection** — django-axes bloquea tras 5 intentos fallidos (1h de cooldown). Los intentos se guardan en la DB: en el admin, **Axes → Access attempts** (filtro *Locked Out*); para desbloquear a alguien, selecciona su registro y bórralo. Si el bloqueado es el propio admin: `make axes-reset`. En producción la IP real se toma de `X-Real-IP` (nginx)
 - **CSP headers** — política estricta vía django-csp, relajada en DEBUG para browser-reload
 - **HSTS** — habilitado en producción (1 año, incluye subdominios)
 - **Static files** — hashes en filenames + cache `immutable` 365 días, seguros porque cambian en cada deploy
@@ -331,8 +374,7 @@ Redis es siempre activo y optimiza tres aspectos clave:
 ## Checklist de personalización
 
 - [ ] Cambiar favicon: reemplazar `static/img/favicon.svg`
-- [ ] Cambiar imagen OG: reemplazar `static/img/og-default.jpg`
-- [ ] Actualizar email de admin en `core/settings.py` → `ADMINS`
+- [ ] Definir `ADMIN_EMAIL` en `.env` para recibir errores 500 por email (requiere SMTP)
 - [ ] Ajustar zona horaria y locale → `TIME_ZONE`, `LANGUAGE_CODE` en `settings.py`
 - [ ] Personalizar tema DaisyUI en `theme/static_src/src/styles.css`
 - [ ] Al agregar nuevas apps: `INSTALLED_APPS` + `@source "../../../<app>"` en `styles.css`

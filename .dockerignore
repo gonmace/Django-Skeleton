@@ -1,5 +1,10 @@
 # Datos y runtime
 db/
+volumes/
+backups/
+.deploy/
+staticfiles/
+media/
 *.sqlite3
 .env
 .env.*
@@ -14,8 +19,14 @@ venv/
 # Node
 node_modules/
 theme/static_src/node_modules/
+static/css/dist/
 
-# Dev y CI
+# Dev, CI y herramientas
 .git/
 .github/
+.claude/
+.impeccable/
 *.log
+*.md
+n8n/
+*.conf

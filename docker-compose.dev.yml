@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - ./db:/var/lib/postgresql/data/
-      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     networks:
@@ -21,7 +21,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: ${PROJECT_NAME:-dev}_redis
     ports:
       - "127.0.0.1:6379:6379"
@@ -72,7 +72,7 @@ services:
     image: ghcr.io/czlonkowski/n8n-mcp:latest
     container_name: ${PROJECT_NAME:-dev}_n8n_mcp
     environment:
-      N8N_BASE_URL: http://n8n:5678
+      N8N_API_URL: http://n8n:5678
       N8N_API_KEY: ${N8N_API_KEY:-}
       AUTH_TOKEN: ${N8N_MCP_AUTH_TOKEN:-dev-mcp-token}
       MCP_MODE: http

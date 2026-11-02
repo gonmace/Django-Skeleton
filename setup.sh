@@ -157,7 +157,7 @@ else
         POSTGRES_HOST_PORT=${POSTGRES_PORT}
         echo ""
         echo "  NOTA: Asegúrate de que PostgreSQL esté configurado para aceptar"
-        echo "  conexiones desde la red Docker (172.17.0.0/16) en pg_hba.conf."
+        echo "  conexiones desde la red Docker (172.16.0.0/12) en pg_hba.conf."
         echo ""
     else
         POSTGRES_MODE=container
@@ -369,6 +369,7 @@ if os.environ.get("N8N_MCP_ENABLED") == "true":
 with open(".env", "w") as f:
     f.write("\n".join(lines) + "\n")
 PYEOF
+chmod 600 .env
 
 # ── Resumen ───────────────────────────────────────────────────────────────────
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

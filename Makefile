@@ -8,11 +8,13 @@ CURRENT_GID := $(shell id -g)
 
 dev-up:
 	@[ -f .env ] || { echo "Error: .env no encontrado. Ejecuta 'make setup' primero."; exit 1; }
+	@command -v docker >/dev/null 2>&1 || { echo "Error: Docker no encontrado (necesario para PostgreSQL y Redis)."; exit 1; }
 	@set -a && . ./.env && set +a; \
-	PROFILES="--profile postgres"; \
+	PROFILES=""; \
+	[ -n "$${POSTGRES_DB}" ] && PROFILES="--profile postgres"; \
 	[ -n "$${N8N_DOMAIN}" ] && { PROFILES="$$PROFILES --profile n8n"; mkdir -p volumes/n8n; }; \
 	[ "$${N8N_MCP_ENABLED}" = "true" ] && [ -n "$${N8N_DOMAIN}" ] && PROFILES="$$PROFILES --profile n8n-mcp"; \
-	UID=$(CURRENT_UID) GID=$(CURRENT_GID) docker compose -f docker-compose.dev.yml $$PROFILES up -d
+	UID=$(CURRENT_UID) GID=$(CURRENT_GID) docker compose -f docker-compose.dev.yml $$PROFILES up -d --wait
 
 dev-down:
 	docker compose -f docker-compose.dev.yml down
@@ -50,7 +52,7 @@ n8n-update:
 	@set -a && . ./.env && set +a; \
 	[ -n "$${N8N_DOMAIN}" ] || { echo "Error: N8N_DOMAIN no definido en .env"; exit 1; }; \
 	echo "▶ Descargando nueva imagen de n8n..."; \
-	docker build -t $${PROJECT_NAME}_n8n:latest -f docker/n8n.Dockerfile .; \
+	docker build --pull --build-arg N8N_VERSION=$${N8N_VERSION:-latest} -t $${PROJECT_NAME}_n8n:latest -f docker/n8n.Dockerfile .; \
 	echo "▶ Reiniciando contenedor n8n..."; \
 	docker compose --profile n8n up -d --no-deps n8n; \
 	echo "✓ n8n actualizado."
@@ -62,11 +64,14 @@ install:
 	@echo ""
 	@[ -f .env ] || echo "  Siguiente paso: ejecuta 'make setup' para generar el .env"
 
+# Levanta PostgreSQL + Redis (+ n8n) en Docker, espera a que estén healthy y arranca
 # Tailwind en background + runserver con django-browser-reload.
 # Python/templates: recarga automática. CSS: refrescar manualmente tras Tailwind recompilar.
-dev:
+# Los contenedores quedan activos al salir; para detenerlos: make dev-down.
+dev: dev-up
 	python manage.py migrate
-	python manage.py tailwind start &
+	@trap 'kill $$(jobs -p) 2>/dev/null' EXIT INT TERM; \
+	python manage.py tailwind start & \
 	python manage.py runserver
 
 tailwind:
@@ -90,6 +95,14 @@ superuser:
 collect:
 	$(MANAGE) collectstatic --noinput
 
+# Copia los archivos de media locales al bucket configurado en el admin (tras cambiar a S3)
+sync-media:
+	$(MANAGE) sync_media
+
+# Desbloquea todos los accesos bloqueados por django-axes (si el bloqueado es el propio admin)
+axes-reset:
+	$(MANAGE) axes_reset
+
 # ── Base de datos (dev) ────────────────────────────────────────────────────────
 db-shell:
 	@[ -f .env ] && . ./.env; \
@@ -104,6 +117,8 @@ db-reset:
 	python manage.py migrate
 
 # ── Producción ────────────────────────────────────────────────────────────────
+# make deploy                  → backup solo si hay migraciones pendientes
+# make deploy BACKUP=always    → fuerza backup  |  BACKUP=never → lo omite
 deploy:
 	bash deploy.sh
 
@@ -113,12 +128,31 @@ nginx:
 check-ports:
 	bash check-ports.sh
 
+# Backups de PostgreSQL (backups/*.sql.gz, retención: últimos 10)
+backup:
+	bash scripts/backup.sh manual
+
+# make restore FILE=backups/20250101-120000-manual.sql.gz
+restore:
+	@[ -n "$(FILE)" ] || { echo "Uso: make restore FILE=backups/archivo.sql.gz"; exit 1; }
+	bash scripts/restore.sh $(FILE)
+
+# Vuelve a la imagen anterior (o make rollback TAG=<sha>). No revierte migraciones.
+rollback:
+	bash scripts/rollback.sh $(TAG)
+
+ps:
+	docker compose --profile postgres --profile n8n --profile n8n-mcp ps
+
+restart:
+	docker compose restart django
+
 logs:
-	docker compose logs -f django
+	docker compose logs -f --tail 100 django
 
 down:
-	docker compose down
+	docker compose --profile postgres --profile n8n --profile n8n-mcp down
 
 .PHONY: setup dev-up dev-down dev-logs dev-check n8n-export n8n-import n8n-update install dev tailwind \
-        migrate migrations shell superuser collect db-shell db-reset \
-        deploy nginx check-ports logs down
+        migrate migrations shell superuser collect sync-media axes-reset db-shell db-reset \
+        deploy nginx check-ports backup restore rollback ps restart logs down

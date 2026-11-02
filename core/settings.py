@@ -22,6 +22,7 @@ ADMIN_URL = config('ADMIN_URL', default='admin/')
 
 INSTALLED_APPS = [
     'home',
+    'cdn',
     'axes',
 
     'django.contrib.admin',
@@ -37,6 +38,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'csp.middleware.CSPMiddleware',
+    'cdn.middleware.MediaCspMiddleware',  # añade la CDN configurada en el admin al CSP
     'django.contrib.sessions.middleware.SessionMiddleware',
     'axes.middleware.AxesMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -92,6 +94,8 @@ if config('POSTGRES_DB', default=''):
             'PASSWORD': config('POSTGRES_PASSWORD'),
             'HOST': config('POSTGRES_HOST', default='postgres'),
             'PORT': config('POSTGRES_PORT', default='5432'),
+            'CONN_MAX_AGE': 60,
+            'CONN_HEALTH_CHECKS': True,
         }
     }
 else:
@@ -125,8 +129,9 @@ STORAGES = {
         # + archivos .gz pre-generados que nginx sirve con gzip_static on
         'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
     },
+    # Media: disco local por defecto; S3/CDN configurable desde el admin (app 'cdn')
     'default': {
-        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+        'BACKEND': 'cdn.storage.ConfigurableMediaStorage',
     },
 }
 
@@ -158,6 +163,7 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_REDIRECT_EXEMPT = [r'^healthz$']  # healthcheck interno de Docker (HTTP plano)
 
 X_FRAME_OPTIONS = 'DENY'
 
@@ -166,40 +172,53 @@ X_FRAME_OPTIONS = 'DENY'
 # En producción, .env siempre define REDIS_URL=redis://redis:6379/0 (nombre del servicio Docker).
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
-CACHES = {
-    'default': {
-        'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': REDIS_URL,
-        'OPTIONS': {
-            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-        },
+if DEBUG and not config('REDIS_URL', default=''):
+    # Dev sin Redis: permite 'runserver' sin contenedores activos.
+    CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            },
+        }
     }
-}
 
-SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+# cached_db: lectura rápida desde Redis y respaldo en DB (un reinicio de Redis no desloguea a nadie).
+SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
 SESSION_CACHE_ALIAS = 'default'
 
 # ── django-axes (protección brute force) ──────────────────────────────────────
 AXES_FAILURE_LIMIT = 5
 AXES_COOLOFF_TIME = 1  # hora
 AXES_LOCKOUT_PARAMETERS = ['ip_address', 'username']
+AXES_RESET_ON_SUCCESS = True
 
-if DEBUG:
-    # En desarrollo se usa el handler de base de datos para no depender de Redis.
-    # Permite correr 'python manage.py runserver' sin contenedores activos.
-    AXES_HANDLER = 'axes.handlers.database.AxesDatabaseHandler'
-else:
-    # En producción Redis siempre está disponible — más rápido bajo ataques.
-    AXES_HANDLER = 'axes.handlers.cache.AxesCacheHandler'
-    AXES_CACHE = 'default'
+# Handler de base de datos en todos los entornos: los intentos fallidos quedan en el admin
+# (Axes → Access attempts) y un superusuario desbloquea borrando el registro del bloqueado.
+# (El handler de caché no guarda nada en DB, así que no se podría gestionar desde el admin.)
+AXES_HANDLER = 'axes.handlers.database.AxesDatabaseHandler'
+
+if not DEBUG:
+    # Tras nginx, REMOTE_ADDR es la IP del gateway Docker (igual para todos): sin esto un
+    # atacante bloquearía a todos los usuarios. nginx sobrescribe X-Real-IP con la IP real
+    # y gunicorn solo escucha en 127.0.0.1, así que el header es confiable.
+    AXES_IPWARE_META_PRECEDENCE_ORDER = ['HTTP_X_REAL_IP', 'REMOTE_ADDR']
 
 # ── Content Security Policy ───────────────────────────────────────────────────
-CSP_DEFAULT_SRC = ("'self'",)
-CSP_SCRIPT_SRC = ("'self'",)
-CSP_STYLE_SRC = ("'self'",)
-CSP_IMG_SRC = ("'self'", "data:")
-CSP_FONT_SRC = ("'self'",)
-CSP_CONNECT_SRC = ("'self'",) if not DEBUG else ("'self'", "ws://localhost:*", "ws://127.0.0.1:*")
+# Formato django-csp >= 4.0
+CONTENT_SECURITY_POLICY = {
+    'DIRECTIVES': {
+        'default-src': ["'self'"],
+        'script-src': ["'self'"],
+        'style-src': ["'self'"],
+        'img-src': ["'self'", 'data:'],
+        'font-src': ["'self'"],
+        'connect-src': ["'self'"] if not DEBUG else ["'self'", 'ws://localhost:*', 'ws://127.0.0.1:*'],
+    },
+}
 
 # ── Integración n8n (opcional) ───────────────────────────────────────────────
 N8N_URL = config('N8N_URL', default='')
@@ -207,7 +226,8 @@ N8N_API_KEY = config('N8N_API_KEY', default='')
 N8N_WEBHOOK_URL = config('N8N_WEBHOOK_URL', default='')
 
 # ── Admins y logging ──────────────────────────────────────────────────────────
-ADMINS = [('Admin', 'admin@example.com')]
+ADMIN_EMAIL = config('ADMIN_EMAIL', default='')
+ADMINS = [('Admin', ADMIN_EMAIL)] if ADMIN_EMAIL else []
 MANAGERS = ADMINS
 
 LOGGING = {
@@ -216,18 +236,24 @@ LOGGING = {
     'filters': {
         'require_debug_false': {'()': 'django.utils.log.RequireDebugFalse'}
     },
+    'formatters': {
+        'simple': {'format': '{asctime} {levelname} {name} {message}', 'style': '{'},
+    },
     'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'simple'},
         'mail_admins': {
             'level': 'ERROR',
             'filters': ['require_debug_false'],
             'class': 'django.utils.log.AdminEmailHandler',
-        }
+        },
     },
+    # Errores visibles en 'docker logs'; email a admins solo si hay ADMIN_EMAIL.
     'loggers': {
+        'django': {'handlers': ['console'], 'level': 'INFO'},
         'django.request': {
-            'handlers': ['mail_admins'],
+            'handlers': ['console'] + (['mail_admins'] if ADMINS else []),
             'level': 'ERROR',
-            'propagate': True,
+            'propagate': False,
         },
     },
 }

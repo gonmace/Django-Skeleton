@@ -1,50 +1,53 @@
 #!/bin/sh
+set -e
 
-echo 'Esperando a que PostgreSQL esté disponible...'
-until python -c "
-import psycopg2, os, sys
-try:
-    psycopg2.connect(
-        dbname=os.environ['POSTGRES_DB'],
-        user=os.environ['POSTGRES_USER'],
-        password=os.environ['POSTGRES_PASSWORD'],
-        host=os.environ.get('POSTGRES_HOST', 'postgres'),
-        port=os.environ.get('POSTGRES_PORT', '5432'),
-    )
-    sys.exit(0)
-except Exception:
-    sys.exit(1)
-"; do
-  echo '  PostgreSQL no disponible, reintentando en 2s...'
-  sleep 2
-done
-echo 'PostgreSQL está listo.'
+MAX_TRIES=60   # 60 intentos x 2s = 2 min
 
-echo 'Esperando a que Redis esté disponible...'
-until python -c "
-import redis, os, sys
-try:
-    r = redis.from_url(os.environ.get('REDIS_URL', 'redis://redis:6379/0'))
-    r.ping()
-    sys.exit(0)
-except Exception:
-    sys.exit(1)
-"; do
-  echo '  Redis no disponible, reintentando en 2s...'
-  sleep 2
-done
-echo 'Redis está listo.'
+wait_for() {
+    name="$1"; shift
+    i=0
+    echo "Esperando a ${name}..."
+    until python -c "$@" 2>/dev/null; do
+        i=$((i + 1))
+        if [ "$i" -ge "$MAX_TRIES" ]; then
+            echo "Error: ${name} no disponible tras $((MAX_TRIES * 2))s." >&2
+            exit 1
+        fi
+        sleep 2
+    done
+    echo "${name} listo."
+}
+
+wait_for PostgreSQL "
+import psycopg2, os
+psycopg2.connect(
+    dbname=os.environ['POSTGRES_DB'],
+    user=os.environ['POSTGRES_USER'],
+    password=os.environ['POSTGRES_PASSWORD'],
+    host=os.environ.get('POSTGRES_HOST', 'postgres'),
+    port=os.environ.get('POSTGRES_PORT', '5432'),
+    connect_timeout=3,
+).close()
+"
+
+wait_for Redis "
+import redis, os
+redis.from_url(os.environ.get('REDIS_URL', 'redis://redis:6379/0'), socket_connect_timeout=3).ping()
+"
 
 echo 'Recopilando archivos estáticos...'
 python manage.py collectstatic --noinput
 chmod -R o+rX /app/staticfiles
 
 echo 'Ejecutando migraciones...'
-python manage.py migrate
+python manage.py migrate --noinput
 
 echo 'Iniciando Gunicorn...'
 exec gunicorn core.wsgi:application \
     --bind 0.0.0.0:8000 \
-    --workers 3 \
+    --workers "${GUNICORN_WORKERS:-3}" \
+    --timeout 60 \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
     --access-logfile - \
     --error-logfile -

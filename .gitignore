@@ -30,7 +30,7 @@ node_modules/
 theme/static_src/node_modules/
 
 # CSS compilado (se genera automáticamente)
-theme/static/css/dist/
+static/css/dist/
 
 # IDE
 .vscode/
@@ -46,6 +46,8 @@ Thumbs.db
 *.pid
 volumes/
 db/
+backups/
+.deploy/
 
 # n8n (workflows sí se versionan, credenciales no)
 n8n/credentials/

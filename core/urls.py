@@ -16,7 +16,6 @@ urlpatterns = [
     path('robots.txt', TemplateView.as_view(
         template_name='robots.txt',
         content_type='text/plain',
-        extra_context={'ADMIN_URL': settings.ADMIN_URL},
     )),
     path('', include('home.urls')),
 ]
