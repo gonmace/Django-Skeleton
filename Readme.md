@@ -378,3 +378,88 @@ Por defecto los uploads se guardan en el propio VPS (`media/`, servidos por ngin
 - [ ] Ajustar zona horaria y locale → `TIME_ZONE`, `LANGUAGE_CODE` en `settings.py`
 - [ ] Personalizar tema DaisyUI en `theme/static_src/src/styles.css`
 - [ ] Al agregar nuevas apps: `INSTALLED_APPS` + `@source "../../../<app>"` en `styles.css`
+
+---
+
+## Arquitectura y convenciones
+
+`core/settings.py` es único; el comportamiento cambia por variables de entorno:
+
+- Sin `POSTGRES_DB` → SQLite · con `POSTGRES_DB` → PostgreSQL.
+- `POSTGRES_MODE=host` → los contenedores usan `host.docker.internal`.
+- Sin `EMAIL_HOST` → emails por consola · con `EMAIL_HOST` → SMTP.
+- `DEBUG=True` → browser-reload y Tailwind activos · `DEBUG=False` → HSTS, CSP estricto e IP real de axes vía `X-Real-IP`.
+
+Reglas a respetar al extender el proyecto:
+
+- **Apps nuevas:** añadir a `INSTALLED_APPS` y `@source "../../../<app>"` en `theme/static_src/src/styles.css`.
+- **Media:** usar siempre `campo.url`; la app `cdn` decide si es disco local o S3/CDN (`MediaCspMiddleware` va después de `CSPMiddleware`).
+- **CSP:** formato django-csp 4 (`CONTENT_SECURITY_POLICY`).
+- **Deploy:** imagen etiquetada con el SHA de git (`${PROJECT_NAME}_app:<sha>`), healthcheck en `/healthz`, contenedor no-root (UID 1000: `staticfiles/` y `media/` deben ser de ese usuario). PostgreSQL fijo en 17.
+- **nginx:** `make nginx` solo una vez; certbot modifica el archivo y `deploy.sh` nunca lo toca.
+- **n8n:** `N8N_ENCRYPTION_KEY` no se cambia nunca.
+- **Windows:** en `settings.py`, dentro de `if DEBUG:`, `NPM_BIN_PATH = r'C:\Program Files\nodejs\npm.cmd'`.
+
+---
+
+## Producto
+
+**Para quién:** desarrolladores que conocen Python, Django, Docker y la línea de comandos, y quieren desplegar Django en un VPS con las decisiones de infraestructura ya tomadas, con criterio y no al azar.
+
+**Objetivo:** un starter kit listo para producción (Tailwind v4 + DaisyUI v5, PostgreSQL/Redis en Docker Compose, Gunicorn tras nginx, n8n opcional) que resuelva el boilerplate (deploy, settings, estáticos, cabeceras de seguridad). Éxito = de `git clone` a un deploy en producción en menos de 30 minutos.
+
+**Personalidad:** moderno, elegante, con opinión. Tono seguro y directo, como buena documentación escrita por quien usa la herramienta.
+
+**Qué evitar:** plantillas Bootstrap genéricas, landing pages de SaaS infladas (testimonios, precios, CTAs ruidosos) y proyectos abandonados (README débil, estilos inconsistentes).
+
+**Principios:** (1) cada píxel se gana su lugar, sin decoración; (2) valores por defecto con opinión y fáciles de sobrescribir; (3) el modo oscuro es de primera clase; (4) densidad sobre espaciosidad; (5) predecible antes que ingenioso. Accesibilidad: WCAG AA en ambos temas, animaciones respetan `prefers-reduced-motion`, idioma principal español (`lang="es"`).
+
+---
+
+## Sistema de diseño
+
+**Idea rectora: "The Confident Default".** Una sola familia tipográfica, un solo acento y superficies planas. Las definiciones reales viven en `theme/static_src/src/styles.css` (temas DaisyUI `light` y `dark`).
+
+### Color
+
+| Rol | Light | Dark | Uso |
+|---|---|---|---|
+| Signal Indigo (primario) | `#6366f1` | `#818cf8` | Acciones primarias, selección activa, focus. ≤10% de la pantalla. Hover `#4f46e5`, pressed `#4338ca` |
+| Sky (info/secundario) | `#0ea5e9` | `#38bdf8` | Información y enlaces externos |
+| Superficie (`base-100`) | `#ffffff` | `#3a3a3e` | Tarjetas, inputs, paneles |
+| Fondo (`base-200`) | `#e6e6e6` | `#2e2e32` | Shell de página, sidebar |
+| Borde (`base-300`) | `#cccccc` | `#4a4a50` | Divisores y bordes en reposo |
+| Texto | `#000000` / `#45484d` / `#6b7280` | `#e8e8ed` / `#8e8e93` | Principal / secundario / terciario (nunca para cuerpo) |
+| Éxito · Aviso · Error | `#10b981` · `#f59e0b` · `#ea580c` | `#34d399` · `#fbbf24` · `#fb923c` | Estados semánticos (texto del aviso en oscuro: `#000`) |
+
+El color es semántico, no estético: si no comunica acción, estado o severidad, no va en pantalla.
+
+### Tipografía
+
+Una sola pila `system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif` (sin fuentes importadas) y `ui-monospace, Menlo, Monaco, 'Cascadia Code'` para código.
+
+| Nivel | Peso / tamaño | Uso |
+|---|---|---|
+| Display | 700 · 1.875rem · lh 1.2 | Título de página (uno por vista), `text-wrap: balance` |
+| Title | 600 · 1.25rem · lh 1.3 | Secciones y títulos de tarjeta |
+| Body | 400 · 1rem · lh 1.5 | Prosa, máx. 65–75ch |
+| Label | 500 · 0.875rem · lh 1.4 | Etiquetas, botones, navegación |
+| Mono | 400 · 0.875rem · lh 1.6 | Comandos, variables de entorno, rutas |
+
+Ningún texto de UI por debajo de 13px.
+
+### Elevación y componentes
+
+- **Plano por defecto:** la profundidad se logra con capas tonales (`base-100/200/300`), no con sombras. Solo la UI flotante (modales, dropdowns, tooltips, toasts) puede llevar sombra.
+- **Radios:** 8px en botones e inputs, 16px en tarjetas, 4px en código inline.
+- **Botón primario:** fondo Signal Indigo, texto blanco, padding 10×20, alto mínimo 40px; hover más oscuro, sin movimiento ni escala; focus `outline: 2px solid #6366f1; outline-offset: 2px`. Variantes *ghost* y *base* para acciones secundarias/terciarias. Deshabilitado: 40% de opacidad.
+- **Inputs:** contorno de 1px `#cccccc`, alto mínimo 48px, focus con borde índigo y halo `rgba(99,102,241,.15)`, error con borde `#ea580c`.
+- **Tarjetas:** `bg-base-100` sobre `bg-base-200`, sin sombra, padding 24px (16px en variantes compactas).
+- **Navegación:** barra superior de 56px con borde inferior, nunca con sombra; en móvil, patrón `drawer` de DaisyUI.
+- **Bloques de código:** `bg-base-200`, mono 0.875rem, padding 16px, radio 8px.
+
+### Hacer y no hacer
+
+**Hacer:** probar contraste en ambos temas (≥4.5:1), definir todos los estados (hover, focus, active, disabled), usar monoespaciada para todo lo que se copia, y preferir estados de carga tipo *skeleton*.
+
+**No hacer:** franjas de color de más de 1px en un borde lateral de tarjetas/alertas, degradados, glassmorphism decorativo, rejillas de tarjetas idénticas icono+título+texto, eyebrows en mayúsculas en cada sección, numeración 01/02/03 decorativa, ni modales como primera solución para flujos secundarios.
